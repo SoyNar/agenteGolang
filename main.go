@@ -43,7 +43,7 @@ type FileResult struct {
 // --- PHPStan ---
 
 func runPHPStan(file string) string {
-	cmd := exec.Command("phpstan", "analyse", "--level=5", "--no-progress", file)
+	cmd := exec.Command("phpstan", "analyse", "--configuration", "/home/nar/GolandProjects/my-agent/phpstan.neon", "--no-progress", file)
 	out, _ := cmd.CombinedOutput()
 	return string(out)
 }
@@ -85,81 +85,100 @@ func callOllama(prompt string) (string, error) {
 
 // --- Paso 1: escanear todos los archivos (rápido, sin LLM) ---
 
-func scanFolder(folder string) ([]FileResult, error) {
-	var results []FileResult
+func scanFolder(file string) ([]FileResult, error) {
+	// En vez de scanFolder, leer directamente el archivo
+	code, err := os.ReadFile(file)
+	if err != nil {
+		fmt.Printf("Error leyendo archivo: %v\n", err)
+		os.Exit(1)
+	}
 
-	err := filepath.WalkDir(folder, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() && d.Name() == "output_81" {
-			return filepath.SkipDir
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".php") {
-			return nil
-		}
+	phpstan := runPHPStan(file)
+	output := strings.ToLower(phpstan)
+	hasIssue := strings.Contains(output, "error") || strings.Contains(output, "warning")
 
-		code, err := os.ReadFile(path)
-		if err != nil {
-			fmt.Printf("  ⚠️  No se pudo leer %s\n", path)
-			return nil
-		}
-
-		phpstan := runPHPStan(path)
-		hasIssue := strings.Contains(phpstan, "error") || strings.Contains(phpstan, "Error")
-
-		status := "✅"
-		if hasIssue {
-			status = "⚠️ "
-		}
-		fmt.Printf("  %s %s\n", status, path)
-
-		results = append(results, FileResult{
-			Path:     path,
-			Code:     string(code),
-			Phpstan:  phpstan,
-			HasIssue: hasIssue,
-		})
-		return nil
-	})
-
-	return results, err
+	results := []FileResult{{
+		Path:     file,
+		Code:     string(code),
+		Phpstan:  phpstan,
+		HasIssue: hasIssue,
+	}}
+	return results, nil
 }
 
 // --- Paso 2: reporte global al final ---
 
-func printReport(results []FileResult) {
-	// Construir un prompt con todos los archivos con problemas
-	var sb strings.Builder
-	sb.WriteString("Eres un senior PHP developer experto en migraciones PHP 7.4 → 8.1.\n")
-	sb.WriteString("Analiza los siguientes archivos y sus resultados de PHPStan.\n")
-	sb.WriteString("Para cada archivo lista los problemas de compatibilidad con PHP 8.1 en español.\n")
-	sb.WriteString("Sé concreto: archivo, línea, problema, por qué falla en 8.1.\n\n")
+func printReport(results []FileResult, reportPath string) {
+	var reportLines strings.Builder
 
-	count := 0
+	hasAny := false
 	for _, r := range results {
 		if !r.HasIssue {
 			continue
 		}
-		count++
-		sb.WriteString(fmt.Sprintf("=== %s ===\n", r.Path))
-		sb.WriteString(fmt.Sprintf("PHPSTAN:\n%s\n\n", r.Phpstan))
+		hasAny = true
 	}
-
-	if count == 0 {
+	if !hasAny {
 		fmt.Println("🎉 No se encontraron problemas de compatibilidad.")
 		return
 	}
 
-	fmt.Printf("\n📋 Analizando %d archivo(s) con problemas...\n\n", count)
-	callOllama(sb.String())
+	for _, r := range results {
+		if !r.HasIssue {
+			continue
+		}
+
+		lines := strings.Split(r.Phpstan, "\n")
+		var filtered []string
+		for _, line := range lines {
+			if !strings.Contains(line, "class.notFound") &&
+				!strings.Contains(line, "not found") {
+				filtered = append(filtered, line)
+			}
+		}
+		phpstanClean := strings.Join(filtered, "\n")
+
+		errorCount := strings.Count(r.Phpstan, "at /home")
+		if errorCount > 100 {
+			fmt.Printf(" %d errores detectados, el análisis puede tardar...\n", errorCount)
+		}
+
+		fmt.Printf("\nAnalizando %s...\n\n", r.Path)
+
+		prompt := fmt.Sprintf(`Eres un senior PHP developer experto en migraciones PHP puro 7.4 → 8.1, sin frameworks.
+IGNORA errores de clases no encontradas, son falsos positivos.
+ANALIZA solo problemas reales de compatibilidad PHP 8.1.
+Responde siempre en español.
+Formato: línea X — problema — cómo corregirlo.
+
+PHPSTAN:
+%s`, phpstanClean)
+
+		// CAMBIO: capturar respuesta de Ollama
+		response, err := callOllama(prompt)
+		if err == nil {
+			// Agregar al reporte .md
+			reportLines.WriteString(fmt.Sprintf("## %s\n\n", r.Path))
+			reportLines.WriteString(response)
+			reportLines.WriteString("\n\n---\n\n")
+		}
+
+		fmt.Println(strings.Repeat("─", 40))
+	}
+
+	// Guardar el .md
+	if reportLines.Len() > 0 {
+		content := "# Reporte de migración PHP 7.4 → 8.1\n\n" + reportLines.String()
+		if err := os.WriteFile(reportPath, []byte(content), 0644); err != nil {
+			fmt.Printf(" No se pudo guardar el reporte: %v\n", err)
+		} else {
+			fmt.Printf("\n Reporte guardado en %s\n", reportPath)
+		}
+	}
 }
-
-// --- Paso 3: generar archivos corregidos ---
-
 func generateFixes(results []FileResult, outputDir string) {
 	for _, r := range results {
-		fmt.Printf("\n🔧 Corrigiendo %s...\n", r.Path)
+		fmt.Printf("\n Corrigiendo %s...\n", r.Path)
 
 		prompt := fmt.Sprintf(`Reescribe este código PHP 7.4 para que sea compatible con PHP 8.1.
 Devuelve ÚNICAMENTE el código PHP corregido, sin explicaciones ni bloques markdown.
@@ -169,7 +188,7 @@ Devuelve ÚNICAMENTE el código PHP corregido, sin explicaciones ni bloques mark
 
 		fixedCode, err := callOllama(prompt)
 		if err != nil {
-			fmt.Printf("  ⚠️  Error: %v\n", err)
+			fmt.Printf("Error: %v\n", err)
 			continue
 		}
 
@@ -185,32 +204,53 @@ Devuelve ÚNICAMENTE el código PHP corregido, sin explicaciones ni bloques mark
 		os.MkdirAll(filepath.Dir(outFile), 0755)
 
 		if err := os.WriteFile(outFile, []byte(fixedCode), 0644); err != nil {
-			fmt.Printf("  ⚠️  No se pudo guardar: %v\n", err)
+			fmt.Printf("   No se pudo guardar: %v\n", err)
 			continue
 		}
-		fmt.Printf("  ✅ Guardado en %s\n", outFile)
+		fmt.Printf("  Guardado en %s\n", outFile)
 	}
 }
 
 // --- Main ---
 
 func main() {
+
 	if len(os.Args) < 2 {
-		fmt.Println("Uso: go run main.go <carpeta>")
+		fmt.Println("Uso: go run main.go <archivo.php>")
 		os.Exit(1)
 	}
 
-	folder := os.Args[1]
-	outputDir := filepath.Join(folder, "output_81")
+	file := os.Args[1]
 
-	fmt.Printf("\n🚀 Agente de migración PHP 7.4 → 8.1\n")
-	fmt.Printf("📁 Carpeta: %s\n\n", folder)
+	if !strings.HasSuffix(file, ".php") {
+		fmt.Println("Solo se aceptan archivos .php")
+		os.Exit(1)
+	}
+
+	info, err := os.Stat(file)
+	if err != nil {
+		fmt.Println("Archivo no encontrado")
+		os.Exit(1)
+	}
+	if info.IsDir() {
+		fmt.Println("Se esperaba un archivo, no una carpeta")
+		os.Exit(1)
+	}
+	if info.Size() > 500*1024 {
+		fmt.Println("Archivo muy grande, máximo 500KB")
+		os.Exit(1)
+	}
+
+	outputDir := filepath.Join(filepath.Dir(file), "output_81")
+
+	fmt.Printf("\nAgente de migración PHP 7.4 → 8.1\n")
+	fmt.Printf(" archivo: %s\n\n", file)
 
 	// Paso 1: escanear (rápido)
-	fmt.Println("⚙️  Escaneando archivos con PHPStan...")
-	results, err := scanFolder(folder)
+	fmt.Println("Escaneando archivo con PHPStan...")
+	results, err := scanFolder(file)
 	if err != nil {
-		fmt.Printf("Error escaneando carpeta: %v\n", err)
+		fmt.Printf("Error escaneando archivo: %v\n", err)
 		os.Exit(1)
 	}
 	if len(results) == 0 {
@@ -225,7 +265,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("\n📦 %d archivo(s) encontrados — %d con posibles problemas\n", len(results), withIssues)
+	fmt.Printf("\n %d archivo(s) encontrados — %d con posibles problemas\n", len(results), withIssues)
 	fmt.Println(strings.Repeat("═", 50))
 
 	// Preguntar modo
@@ -241,16 +281,18 @@ func main() {
 	fmt.Println()
 
 	// Paso 2: reporte siempre
+	reportPath := filepath.Join(filepath.Dir(file), "reporte_81.md")
+
 	fmt.Println(strings.Repeat("─", 50))
-	printReport(results)
+	printReport(results, reportPath) // ← agregar reportPath
 	fmt.Println(strings.Repeat("─", 50))
 
 	// Paso 3: corregir solo si eligió opción 2
 	if option == "2" {
-		fmt.Printf("\n💾 Generando archivos corregidos en %s\n", outputDir)
+		fmt.Printf("\n Generando archivos corregidos en %s\n", outputDir)
 		fmt.Println(strings.Repeat("─", 50))
 		generateFixes(results, outputDir)
-		fmt.Printf("\n✅ Listo. Originales intactos en %s\n", folder)
+		fmt.Printf("\n Listo. Originales intactos en %s\n", file)
 		fmt.Printf("   Corregidos en %s\n", outputDir)
 	} else {
 		fmt.Println("\nReporte completo. Corre con opción 2 cuando quieras generar los archivos corregidos.")

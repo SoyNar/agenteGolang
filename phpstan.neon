@@ -1,0 +1,3 @@
+parameters:
+  phpVersion: 80100
+  level: 8
