@@ -55,3 +55,7 @@ Prometheus usa **LangChain** para orquestar un ciclo de migración inteligente:
 4. **Reintentos inteligentes** — Si aún hay errores, LangChain repite el ciclo hasta **3 veces**, usando cada versión corregida como base para el siguiente intento.
 
 Este enfoque garantiza que el código migrado no solo sea sintácticamente correcto, sino que pase validación estática antes de ser entregado.
+
+## Decisiones de diseño
+
+Este proyecto fue construido como parte de un proceso de aprendizaje real. No tenía experiencia previa en Go ni en LangChain, así que estudié el lenguaje y sus patrones desde cero. También investigué a fondo el paradigma CodeAct, ya que si bien había construido agentes antes, nunca los había implementado bajo el enfoque de código como acción. Eso llevó a replantear varias decisiones de diseño durante el desarrollo y a entender de verdad por qué este paradigma es más poderoso que los enfoques tradicionales basados solo en texto.
