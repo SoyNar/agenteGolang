@@ -58,4 +58,4 @@ Este enfoque garantiza que el código migrado no solo sea sintácticamente corre
 
 ## Decisiones de diseño
 
-Este proyecto fue construido como parte de un proceso de aprendizaje real. No tenía experiencia previa en Go ni en LangChain, así que estudié el lenguaje y sus patrones desde cero. También investigué a fondo el paradigma CodeAct, ya que si bien había construido agentes antes, nunca los había implementado bajo el enfoque de código como acción. Eso llevó a replantear varias decisiones de diseño durante el desarrollo y a entender de verdad por qué este paradigma es más poderoso que los enfoques tradicionales basados solo en texto.
+Este proyecto fue construido como parte de un proceso de aprendizaje real. investigacion a fondo el paradigma CodeAct..
