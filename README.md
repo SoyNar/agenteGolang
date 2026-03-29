@@ -19,8 +19,8 @@ Prometheus recibe tu archivo PHP antiguo, lo analiza en profundidad y lo transfo
 
 1. Clona el repositorio:
 ```bash
-   git clone https://github.com/tu-usuario/prometheus
-   cd prometheus
+   git clone https://github.com/tu-usuario/agenteGolang
+   cd agenteGolang
 ```
 
 2. Crea el archivo `.env` con tu API Key:
